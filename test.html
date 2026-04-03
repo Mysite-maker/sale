@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Executive Real-time Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #020617; color: #f8fafc; }
+        .glass-card { 
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-card:hover { border-color: rgba(34, 211, 238, 0.5); transform: translateY(-4px); }
+        .stat-gradient { background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); }
+        .loading-overlay {
+            position: fixed; inset: 0; background: #020617;
+            display: flex; justify-content: center; align-items: center; z-index: 50;
+        }
+    </style>
+</head>
+<body class="p-6 md:p-12 antialiased">
+
+    <div id="loader" class="loading-overlay">
+        <div class="text-center">
+            <div class="w-16 h-16 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p class="text-cyan-400 font-bold animate-pulse">CONNECTING TO GOOGLE SHEETS...</p>
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div>
+                <h1 class="text-4xl font-extrabold tracking-tight">Performance <span class="text-cyan-400">Insights</span></h1>
+                <p class="text-slate-400 mt-2 flex items-center">
+                    <span class="relative flex h-3 w-3 mr-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-cyan-500"></span>
+                    </span>
+                    Data synced: <span id="current-time" class="ml-2 font-mono text-cyan-300">Loading...</span>
+                </p>
+            </div>
+            <button onclick="updateDashboardFromSheet()" class="px-6 py-3 glass-card rounded-2xl text-sm font-bold hover:bg-slate-800 transition-colors">
+                🔄 Sync Now
+            </button>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="glass-card p-8 rounded-[2rem]">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-[0.2em]">Active Users</p>
+                <h3 id="val-users" class="text-5xl font-bold mt-3 tabular-nums text-white">0</h3>
+                <div class="mt-4 flex items-center text-emerald-400 text-sm font-bold">
+                    <span>LIVE STATUS</span>
+                </div>
+            </div>
+
+            <div class="glass-card p-8 rounded-[2rem]">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-[0.2em]">Page Views Today</p>
+                <h3 id="val-views" class="text-5xl font-bold mt-3 tabular-nums text-white">0</h3>
+                <div class="mt-4 flex items-center text-cyan-400 text-sm font-bold">
+                    <span>DAILY TRAFFIC</span>
+                </div>
+            </div>
+
+            <div class="stat-gradient p-8 rounded-[2rem] shadow-2xl shadow-blue-500/20">
+                <p class="text-blue-100 text-xs font-bold uppercase tracking-[0.2em]">Total Sales Today</p>
+                <h3 id="val-sales" class="text-5xl font-black mt-3 tabular-nums text-white">฿0</h3>
+                <div class="mt-4 flex items-center text-white/80 text-sm font-bold">
+                    <span class="bg-white/20 px-3 py-1 rounded-full text-[10px]">REAL-TIME REVENUE</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-card p-8 md:p-10 rounded-[3rem]">
+            <div class="flex justify-between items-center mb-10">
+                <div>
+                    <h3 class="text-2xl font-bold text-white">Hourly Sales Breakdown</h3>
+                    <p class="text-slate-400 mt-1">ยอดขายรายชั่วโมงดึงข้อมูลโดยตรงจาก Worksheet</p>
+                </div>
+            </div>
+            <div class="w-full h-[450px]">
+                <canvas id="salesChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // *** 1. ใส่ LINK CSV ของท่านที่นี่ ***
+        const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSRtnWWmTS7KYVUWPvBRPoGZa4XshkOx1Ict8lrnnmIHaYjGMVlZZkTkiC7e9PEso8asGXdt9Aqc5sD/pub?gid=0&single=true&output=csv'; 
+
+        let salesChart;
+
+        // Update Clock
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('current-time').innerText = now.toLocaleString('th-TH');
+        }
+
+        // Initialize Chart
+        function initChart() {
+            const ctx = document.getElementById('salesChart').getContext('2d');
+            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+            gradient.addColorStop(0, 'rgba(34, 211, 238, 0.4)');
+            gradient.addColorStop(1, 'rgba(34, 211, 238, 0)');
+
+            salesChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'ยอดขาย (บาท)',
+                        data: [],
+                        borderColor: '#22d3ee',
+                        borderWidth: 4,
+                        tension: 0.4,
+                        fill: true,
+                        backgroundColor: gradient,
+                        pointRadius: 6,
+                        pointBackgroundColor: '#22d3ee'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { 
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: '#94a3b8', callback: v => '฿' + v.toLocaleString() }
+                        },
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        // Fetch & Update Data
+        async function updateDashboardFromSheet() {
+            try {
+                const response = await fetch(SHEET_CSV_URL);
+                const csvText = await response.text();
+                
+                Papa.parse(csvText, {
+                    complete: function(results) {
+                        const rows = results.data;
+
+                        // อัปเดต KPI (แถวที่ 2 ของ Sheet ตามที่เราคุยกัน)
+                        const kpi = rows[1];
+                        if(kpi) {
+                            document.getElementById('val-users').innerText = Number(kpi[0]).toLocaleString();
+                            document.getElementById('val-views').innerText = Number(kpi[1]).toLocaleString();
+                            document.getElementById('val-sales').innerText = '฿' + Number(kpi[2]).toLocaleString();
+                        }
+
+                        // อัปเดต กราฟ (แถวที่ 5 เป็นต้นไป)
+                        const labels = [];
+                        const values = [];
+                        for (let i = 4; i < rows.length; i++) {
+                            if (rows[i][0] && rows[i][1]) {
+                                labels.push(rows[i][0]);
+                                values.push(Number(rows[i][1]));
+                            }
+                        }
+
+                        salesChart.data.labels = labels;
+                        salesChart.data.datasets[0].data = values;
+                        salesChart.update();
+                        
+                        updateClock();
+                        document.getElementById('loader').classList.add('hidden');
+                    }
+                });
+            } catch (error) {
+                console.error("Fetch Error:", error);
+                alert("ไม่สามารถดึงข้อมูลจาก Google Sheets ได้ โปรดตรวจสอบ Link");
+            }
+        }
+
+        window.onload = () => {
+            initChart();
+            updateDashboardFromSheet();
+            // อัปเดตอัตโนมัติทุก 1 นาที
+            setInterval(updateDashboardFromSheet, 60000);
+        };
+    </script>
+</body>
+</html>
